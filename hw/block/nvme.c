@@ -984,7 +984,12 @@ static uint16_t nvme_create_sq(NvmeCtrl *n, NvmeCmd *cmd)
     if (!qsize || qsize > NVME_CAP_MQES(n->bar.cap)) {
         return NVME_MAX_QSIZE_EXCEEDED | NVME_DNR;
     }
-    if (!prp1 || prp1 & (n->page_size - 1)) {
+    if (n->cmbsz && prp1 >= n->ctrl_mem.addr &&
+                prp1 < (n->ctrl_mem.addr + int128_get64(n->ctrl_mem.size))) {
+            if (!prp1 || prp1 & ((sizeof(*cmd) - 1))) {
+                return NVME_INVALID_FIELD | NVME_DNR;
+            }
+    } else if (!prp1 || prp1 & (n->page_size - 1)) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
     if (!(NVME_SQ_FLAGS_PC(qflags)) && NVME_CAP_CQR(n->bar.cap)) {
