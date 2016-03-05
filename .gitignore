@@ -109,3 +109,8 @@ cscope.*
 tags
 TAGS
 *~
+/GPATH
+/GRTAGS
+/GSYMS
+/GTAGS
+/tests/qemu-iotests/common.env
