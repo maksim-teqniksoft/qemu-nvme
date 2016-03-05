@@ -149,13 +149,16 @@ enum NvmeCmblocMask {
     CMBLOC_OFST_MASK = 0xfffff,
 };
 
-#define NVME_CMBLOC_BIR(cmbloc) ((cmbloc >> CMBLOC_BIR_SHIFT)  & CMBLOC_BIR_MASK)
-#define NVME_CMBLOC_OFST(cmbloc)((cmbloc >> CMBLOC_OFST_SHIFT) & CMBLOC_OFST_MASK)
+#define NVME_CMBLOC_BIR(cmbloc)                     \
+    ((cmbloc >> CMBLOC_BIR_SHIFT)  & CMBLOC_BIR_MASK)
+#define NVME_CMBLOC_OFST(cmbloc)                    \
+    ((cmbloc >> CMBLOC_OFST_SHIFT) & CMBLOC_OFST_MASK)
 
-#define NVME_CMBLOC_SET_BIR(cmbloc, val)   (cmbloc |= (uint64_t)(val & CMBLOC_BIR_MASK)  \
-                                                                   << CMBLOC_BIR_SHIFT)
-#define NVME_CMBLOC_SET_OFST(cmbloc, val)  (cmbloc |= (uint64_t)(val & CMBLOC_OFST_MASK)  \
-                                                                   << CMBLOC_OFST_SHIFT)
+#define NVME_CMBLOC_SET_BIR(cmbloc, val)        \
+    (cmbloc |= (uint64_t)(val & CMBLOC_BIR_MASK) << CMBLOC_BIR_SHIFT)
+#define NVME_CMBLOC_SET_OFST(cmbloc, val)       \
+    (cmbloc |= (uint64_t)(val & CMBLOC_OFST_MASK) << CMBLOC_OFST_SHIFT)
+
 enum NvmeCmbszShift {
     CMBSZ_SQS_SHIFT   = 0,
     CMBSZ_CQS_SHIFT   = 1,
@@ -184,22 +187,23 @@ enum NvmeCmbszMask {
 #define NVME_CMBSZ_SZU(cmbsz)  ((cmbsz >> CMBSZ_SZU_SHIFT)   & CMBSZ_SZU_MASK)
 #define NVME_CMBSZ_SZ(cmbsz)   ((cmbsz >> CMBSZ_SZ_SHIFT)    & CMBSZ_SZ_MASK)
 
-#define NVME_CMBSZ_SET_SQS(cmbsz, val)   (cmbsz |= (uint64_t)(val & CMBSZ_SQS_MASK)  \
-                                                                << CMBSZ_SQS_SHIFT)
-#define NVME_CMBSZ_SET_CQS(cmbsz, val)   (cmbsz |= (uint64_t)(val & CMBSZ_CQS_MASK)  \
-                                                                 << CMBSZ_CQS_SHIFT)
-#define NVME_CMBSZ_SET_LISTS(cmbsz, val) (cmbsz |= (uint64_t)(val & CMBSZ_LISTS_MASK)  \
-                                                                << CMBSZ_LISTS_SHIFT)
-#define NVME_CMBSZ_SET_RDS(cmbsz, val)   (cmbsz |= (uint64_t)(val & CMBSZ_RDS_MASK)  \
-                                                                << CMBSZ_RDS_SHIFT)
-#define NVME_CMBSZ_SET_WDS(cmbsz, val)   (cmbsz |= (uint64_t)(val & CMBSZ_WDS_MASK)  \
-                                                                << CMBSZ_WDS_SHIFT)
-#define NVME_CMBSZ_SET_SZU(cmbsz, val)   (cmbsz |= (uint64_t)(val & CMBSZ_SZU_MASK)  \
-                                                                << CMBSZ_SZU_SHIFT)
-#define NVME_CMBSZ_SET_SZ(cmbsz, val)    (cmbsz |= (uint64_t)(val & CMBSZ_SZ_MASK)  \
-                                                                << CMBSZ_SZ_SHIFT)
+#define NVME_CMBSZ_SET_SQS(cmbsz, val)          \
+    (cmbsz |= (uint64_t)(val & CMBSZ_SQS_MASK) << CMBSZ_SQS_SHIFT)
+#define NVME_CMBSZ_SET_CQS(cmbsz, val)          \
+    (cmbsz |= (uint64_t)(val & CMBSZ_CQS_MASK) << CMBSZ_CQS_SHIFT)
+#define NVME_CMBSZ_SET_LISTS(cmbsz, val)        \
+    (cmbsz |= (uint64_t)(val & CMBSZ_LISTS_MASK) << CMBSZ_LISTS_SHIFT)
+#define NVME_CMBSZ_SET_RDS(cmbsz, val)          \
+    (cmbsz |= (uint64_t)(val & CMBSZ_RDS_MASK) << CMBSZ_RDS_SHIFT)
+#define NVME_CMBSZ_SET_WDS(cmbsz, val)          \
+    (cmbsz |= (uint64_t)(val & CMBSZ_WDS_MASK) << CMBSZ_WDS_SHIFT)
+#define NVME_CMBSZ_SET_SZU(cmbsz, val)          \
+    (cmbsz |= (uint64_t)(val & CMBSZ_SZU_MASK) << CMBSZ_SZU_SHIFT)
+#define NVME_CMBSZ_SET_SZ(cmbsz, val)           \
+    (cmbsz |= (uint64_t)(val & CMBSZ_SZ_MASK) << CMBSZ_SZ_SHIFT)
 
-#define NVME_CMBSZ_GETSIZE(cmbsz) (NVME_CMBSZ_SZ(cmbsz) * (1<<(12+4*NVME_CMBSZ_SZU(cmbsz))))
+#define NVME_CMBSZ_GETSIZE(cmbsz)               \
+    (NVME_CMBSZ_SZ(cmbsz) * (1<<(12+4*NVME_CMBSZ_SZU(cmbsz))))
 
 typedef struct NvmeCmd {
     uint8_t     opcode;
