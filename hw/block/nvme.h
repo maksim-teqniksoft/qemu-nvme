@@ -1,6 +1,18 @@
 #ifndef HW_NVME_H
 #define HW_NVME_H
 
+#define NVME_MAX_QS PCI_MSIX_FLAGS_QSIZE
+#define NVME_MAX_QUEUE_ENTRIES  0xffff
+#define NVME_MAX_STRIDE         12
+#define NVME_MAX_NUM_NAMESPACES 256
+#define NVME_MAX_QUEUE_ES       0xf
+#define NVME_MIN_CQUEUE_ES      0x4
+#define NVME_MIN_SQUEUE_ES      0x6
+#define NVME_SPARE_THRESHOLD    20
+#define NVME_TEMPERATURE        0x143
+#define NVME_OP_ABORTED         0xff
+#define NVME_BROADCAST_NSID     0xffffffff
+
 typedef struct NvmeBar {
     uint64_t    cap;
     uint32_t    vs;
@@ -846,7 +858,8 @@ typedef struct NvmeCtrl {
     char            *serial;
     NvmeErrorLog    *elpes;
     NvmeRequest     **aer_reqs;
-    NvmeNamespace   *namespaces;
+    NvmeNamespace   *ns_all[NVME_MAX_NUM_NAMESPACES];
+    NvmeNamespace   *ns_attached[NVME_MAX_NUM_NAMESPACES];
     NvmeSQueue      **sq;
     NvmeCQueue      **cq;
     NvmeSQueue      admin_sq;
