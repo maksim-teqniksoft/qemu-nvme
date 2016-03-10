@@ -878,4 +878,13 @@ typedef struct NvmeDifTuple {
     uint32_t ref_tag;
 } NvmeDifTuple;
 
+typedef struct NvmeNsList {
+    uint32_t id[1024];
+} NvmeNsList;
+
+typedef struct NvmeCtrlList {
+    uint16_t length;
+    uint16_t id[2047];
+} NvmeCtrlList;
+
 #endif /* HW_NVME_H */
