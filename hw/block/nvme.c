@@ -1133,6 +1133,23 @@ static uint16_t nvme_identify(NvmeCtrl *n, NvmeCmd *cmd)
     if (cns == 1) {
         return nvme_dma_read_prp(n, (uint8_t *)&n->id_ctrl, sizeof(n->id_ctrl),
             prp1, prp2);
+    } else if (cns == 0x02 || cns == 0x10) {
+        /* Report namespaces with NSID >= nsid
+           cns == 0x02 - list active namespaces
+           cns == 0x10 - list allocated namespaces
+         */
+        NvmeNsList list;
+        unsigned int i = nsid > 0 ? nsid - 1 : 0;
+        unsigned int j = 0;
+
+        memset(&list, 0, sizeof(list));
+        for (; i < n->num_namespaces; i++) {
+            list.id[j] = n->namespaces[i].id;
+            j++;
+        }
+
+        return nvme_dma_read_prp(n, (uint8_t *)&list, sizeof(list),
+                                 prp1, prp2);
     } else if (cns != 0) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
