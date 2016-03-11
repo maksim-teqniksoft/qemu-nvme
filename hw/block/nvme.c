@@ -1724,6 +1724,8 @@ static void nvme_clear_ctrl(NvmeCtrl *n)
 
     for (i = 0; i < ARRAY_SIZE(n->ns_all); i++) {
         g_free(n->ns_all[i]);
+        n->ns_all[i] = NULL;
+        n->ns_attached[i] = NULL;
     }
 }
 
