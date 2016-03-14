@@ -1587,6 +1587,49 @@ static uint16_t nvme_set_db_memory(NvmeCtrl *n, const NvmeCmd *cmd)
     return NVME_SUCCESS;
 }
 
+static uint16_t nvme_namespace_attach(NvmeCtrl *n, NvmeCmd *cmd)
+{
+    unsigned int sel = le32_to_cpu(cmd->cdw10) & 0x0f;
+    uint64_t prp1 = le64_to_cpu(cmd->prp1);
+    uint64_t prp2 = le64_to_cpu(cmd->prp2);
+    uint32_t nsid = le32_to_cpu(cmd->nsid);
+    NvmeCtrlList list;
+    uint16_t status;
+
+    status = nvme_dma_write_prp(n, (uint8_t *)&list, sizeof(list), prp1, prp2);
+    if (status != NVME_SUCCESS) {
+        return status;
+    }
+
+    if (list.length != 1 || list.id[0] != 0) {
+        return NVME_INVALID_CTRL_LIST | NVME_DNR;
+    }
+
+    if (nsid == 0 || nsid > NVME_MAX_NUM_NAMESPACES ||
+        n->ns_all[nsid - 1] == NULL) {
+        return NVME_INVALID_NSID | NVME_DNR;
+    }
+
+    switch (sel) {
+    case 0:                                                 /* Attach */
+        if (n->ns_attached[nsid - 1] != NULL) {
+            return NVME_NS_ALREADY_ATTACHED | NVME_DNR;
+        }
+        n->ns_attached[nsid - 1] = n->ns_all[nsid - 1];
+        break;
+    case 1:                                                 /* Detach */
+        if (n->ns_attached[nsid - 1] == NULL) {
+            return NVME_NS_NOT_ATTACHED | NVME_DNR;
+        }
+        n->ns_attached[nsid - 1] = NULL;
+        break;
+    default:
+        return NVME_INVALID_FIELD | NVME_DNR;
+    }
+
+    return NVME_SUCCESS;
+}
+
 static uint16_t nvme_admin_cmd(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 {
     switch (cmd->opcode) {
@@ -1617,6 +1660,11 @@ static uint16_t nvme_admin_cmd(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         return NVME_INVALID_OPCODE | NVME_DNR;
     case NVME_ADM_CMD_SET_DB_MEMORY:
         return nvme_set_db_memory(n, cmd);
+    case NVME_ADM_CMD_NS_ATTACH:
+        if (n->oacs & NVME_OACS_NS) {
+            return nvme_namespace_attach(n, cmd);
+        }
+        return NVME_INVALID_OPCODE | NVME_DNR;
     case NVME_ADM_CMD_ACTIVATE_FW:
     case NVME_ADM_CMD_DOWNLOAD_FW:
     case NVME_ADM_CMD_SECURITY_SEND:
@@ -1984,7 +2032,7 @@ static int nvme_check_constraints(NvmeCtrl *n)
         (n->dps & DPS_TYPE_MASK && !((n->dpc & NVME_ID_NS_DPC_TYPE_MASK) &
             (1 << ((n->dps & DPS_TYPE_MASK) - 1)))) ||
         (n->mpsmax > 0xf || n->mpsmax > n->mpsmin) ||
-        (n->oacs & ~(NVME_OACS_FORMAT)) ||
+        (n->oacs & ~(NVME_OACS_ALL)) ||
         (n->oncs & ~(NVME_ONCS_COMPARE | NVME_ONCS_WRITE_UNCORR |
             NVME_ONCS_DSM | NVME_ONCS_WRITE_ZEROS))) {
         return -1;
@@ -2218,7 +2266,7 @@ static Property nvme_props[] = {
     DEFINE_PROP_UINT8("meta", NvmeCtrl, meta, 0),
     DEFINE_PROP_UINT32("cmbsz", NvmeCtrl, cmbsz, 0),
     DEFINE_PROP_UINT32("cmbloc", NvmeCtrl, cmbloc, 0),
-    DEFINE_PROP_UINT16("oacs", NvmeCtrl, oacs, NVME_OACS_FORMAT),
+    DEFINE_PROP_UINT16("oacs", NvmeCtrl, oacs, NVME_OACS_FORMAT | NVME_OACS_NS),
     DEFINE_PROP_UINT16("oncs", NvmeCtrl, oncs, NVME_ONCS_DSM),
     DEFINE_PROP_UINT16("vid", NvmeCtrl, vid, PCI_VENDOR_ID_INTEL),
     DEFINE_PROP_UINT16("did", NvmeCtrl, did, 0x5845),
