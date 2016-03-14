@@ -122,7 +122,7 @@ static void nvme_process_sq(void *opaque);
 
 static inline uint16_t nvme_check_nsid(const NvmeCtrl *n, uint32_t nsid)
 {
-    if (nsid == 0 || nsid > ARRAY_SIZE(n->ns_all)) {
+    if (nsid == 0 || nsid > n->id_ctrl.nn) {
         return NVME_INVALID_NSID | NVME_DNR;
     } else if (n->ns_all[nsid - 1] == NULL) {
         return NVME_INVALID_NSID | NVME_DNR;
