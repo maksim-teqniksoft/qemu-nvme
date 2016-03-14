@@ -1630,6 +1630,52 @@ static uint16_t nvme_namespace_attach(NvmeCtrl *n, NvmeCmd *cmd)
     return NVME_SUCCESS;
 }
 
+static uint16_t nvme_namespace_delete(NvmeCtrl *n, uint32_t nsid)
+{
+    uint16_t status = nvme_check_nsid(n, nsid);
+    NvmeNamespace *ns;
+
+    if ((status & NVME_INVALID_NSID) == NVME_INVALID_NSID) {
+        return status;
+    }
+
+    ns = n->ns_all[nsid - 1];
+
+    g_free(ns->util);
+    g_free(ns->uncorrectable);
+    g_free(ns);
+
+    n->ns_all[nsid - 1] = NULL;
+    n->ns_attached[nsid - 1] = NULL;
+
+    return NVME_SUCCESS;
+}
+
+static uint16_t nvme_namespace_management(NvmeCtrl *n, NvmeCmd *cmd)
+{
+    unsigned int sel = le32_to_cpu(cmd->cdw10) & 0x0f;
+    uint32_t nsid = le32_to_cpu(cmd->nsid);
+
+    switch (sel) {
+    case 0:                                                 /* Create */
+        return NVME_INVALID_OPCODE | NVME_DNR;
+    case 1:                                                 /* Delete */
+        if (nsid == NVME_BROADCAST_NSID) {
+            unsigned int i;
+            for (i = 0; i < ARRAY_SIZE(n->ns_all); i++) {
+                nvme_namespace_delete(n, i + 1);
+            }
+            return NVME_SUCCESS;
+        } else {
+            return nvme_namespace_delete(n, nsid);
+        }
+    default:
+        return NVME_INVALID_FIELD | NVME_DNR;
+    }
+
+    return NVME_SUCCESS;
+}
+
 static uint16_t nvme_admin_cmd(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 {
     switch (cmd->opcode) {
@@ -1663,6 +1709,11 @@ static uint16_t nvme_admin_cmd(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
     case NVME_ADM_CMD_NS_ATTACH:
         if (n->oacs & NVME_OACS_NS) {
             return nvme_namespace_attach(n, cmd);
+        }
+        return NVME_INVALID_OPCODE | NVME_DNR;
+    case NVME_ADM_CMD_NS_MANAGEMENT:
+        if (n->oacs & NVME_OACS_NS) {
+            return nvme_namespace_management(n, cmd);
         }
         return NVME_INVALID_OPCODE | NVME_DNR;
     case NVME_ADM_CMD_ACTIVATE_FW:
