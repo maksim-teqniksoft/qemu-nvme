@@ -21,10 +21,11 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/blockdev.h"
-#include "hw/ssi.h"
+#include "hw/ssi/ssi.h"
 
 #ifndef M25P80_ERR_DEBUG
 #define M25P80_ERR_DEBUG 0
@@ -163,6 +164,7 @@ static const FlashPartInfo known_devices[] = {
     { INFO("sst25wf010",  0xbf2502,      0,  64 << 10,   2, ER_4K) },
     { INFO("sst25wf020",  0xbf2503,      0,  64 << 10,   4, ER_4K) },
     { INFO("sst25wf040",  0xbf2504,      0,  64 << 10,   8, ER_4K) },
+    { INFO("sst25wf080",  0xbf2505,      0,  64 << 10,  16, ER_4K) },
 
     /* ST Microelectronics -- newer production may have feature updates */
     { INFO("m25p05",      0x202010,      0,  32 << 10,   2, 0) },
@@ -621,13 +623,16 @@ static int m25p80_init(SSISlave *ss)
 
     s->size = s->pi->sector_size * s->pi->n_sectors;
     s->dirty_page = -1;
-    s->storage = blk_blockalign(s->blk, s->size);
 
+    /* FIXME use a qdev drive property instead of drive_get_next() */
     dinfo = drive_get_next(IF_MTD);
 
     if (dinfo) {
         DB_PRINT_L(0, "Binding to IF_MTD drive\n");
         s->blk = blk_by_legacy_dinfo(dinfo);
+        blk_attach_dev_nofail(s->blk, s);
+
+        s->storage = blk_blockalign(s->blk, s->size);
 
         /* FIXME: Move to late init */
         if (blk_read(s->blk, 0, s->storage,
@@ -637,6 +642,7 @@ static int m25p80_init(SSISlave *ss)
         }
     } else {
         DB_PRINT_L(0, "No BDRV - binding to RAM\n");
+        s->storage = blk_blockalign(NULL, s->size);
         memset(s->storage, 0xFF, s->size);
     }
 

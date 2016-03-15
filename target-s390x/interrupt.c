@@ -7,6 +7,7 @@
  * option) any later version.  See the COPYING file in the top-level directory.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "sysemu/kvm.h"
 
@@ -22,21 +23,8 @@ void s390_sclp_extint(uint32_t parm)
         kvm_s390_service_interrupt(parm);
     } else {
         S390CPU *dummy_cpu = s390_cpu_addr2state(0);
-        CPUS390XState *env = &dummy_cpu->env;
 
-        env->psw.addr += 4;
         cpu_inject_ext(dummy_cpu, EXT_SERVICE, parm, 0);
-    }
-}
-
-void s390_virtio_irq(int config_change, uint64_t token)
-{
-    if (kvm_enabled()) {
-        kvm_s390_virtio_irq(config_change, token);
-    } else {
-        S390CPU *dummy_cpu = s390_cpu_addr2state(0);
-
-        cpu_inject_ext(dummy_cpu, EXT_VIRTIO, config_change, token);
     }
 }
 

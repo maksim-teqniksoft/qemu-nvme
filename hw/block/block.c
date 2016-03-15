@@ -7,6 +7,7 @@
  * later.  See the COPYING file in the top-level directory.
  */
 
+#include "qemu/osdep.h"
 #include "sysemu/blockdev.h"
 #include "sysemu/block-backend.h"
 #include "hw/block/block.h"
@@ -21,6 +22,30 @@ void blkconf_serial(BlockConf *conf, char **serial)
         dinfo = blk_legacy_dinfo(conf->blk);
         if (dinfo) {
             *serial = g_strdup(dinfo->serial);
+        }
+    }
+}
+
+void blkconf_blocksizes(BlockConf *conf)
+{
+    BlockBackend *blk = conf->blk;
+    BlockSizes blocksizes;
+    int backend_ret;
+
+    backend_ret = blk_probe_blocksizes(blk, &blocksizes);
+    /* fill in detected values if they are not defined via qemu command line */
+    if (!conf->physical_block_size) {
+        if (!backend_ret) {
+           conf->physical_block_size = blocksizes.phys;
+        } else {
+            conf->physical_block_size = BDRV_SECTOR_SIZE;
+        }
+    }
+    if (!conf->logical_block_size) {
+        if (!backend_ret) {
+            conf->logical_block_size = blocksizes.log;
+        } else {
+            conf->logical_block_size = BDRV_SECTOR_SIZE;
         }
     }
 }

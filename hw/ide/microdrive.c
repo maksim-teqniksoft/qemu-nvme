@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include <hw/hw.h>
 #include <hw/i386/pc.h>
 #include <hw/pcmcia.h>
@@ -543,7 +544,6 @@ static int dscm1xxxx_attach(PCMCIACardState *card)
     device_reset(DEVICE(md));
     md_interrupt_update(md);
 
-    card->slot->card_string = "DSCM-1xxxx Hitachi Microdrive";
     return 0;
 }
 

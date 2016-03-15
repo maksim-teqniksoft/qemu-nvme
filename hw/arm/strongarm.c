@@ -26,13 +26,16 @@
  *  Contributions after 2012-01-13 are licensed under the terms of the
  *  GNU GPL, version 2 or (at your option) any later version.
  */
+
+#include "qemu/osdep.h"
+#include "hw/boards.h"
 #include "hw/sysbus.h"
 #include "strongarm.h"
 #include "qemu/error-report.h"
 #include "hw/arm/arm.h"
 #include "sysemu/char.h"
 #include "sysemu/sysemu.h"
-#include "hw/ssi.h"
+#include "hw/ssi/ssi.h"
 
 //#define DEBUG
 
@@ -526,7 +529,7 @@ static void strongarm_gpio_handler_update(StrongARMGPIOInfo *s)
     level = s->olevel & s->dir;
 
     for (diff = s->prev_level ^ level; diff; diff ^= 1 << bit) {
-        bit = ffs(diff) - 1;
+        bit = ctz32(diff);
         qemu_set_irq(s->handler[bit], (level >> bit) & 1);
     }
 
@@ -743,7 +746,7 @@ static void strongarm_ppc_handler_update(StrongARMPPCInfo *s)
     level = s->olevel & s->dir;
 
     for (diff = s->prev_level ^ level; diff; diff ^= 1 << bit) {
-        bit = ffs(diff) - 1;
+        bit = ctz32(diff);
         qemu_set_irq(s->handler[bit], (level >> bit) & 1);
     }
 
@@ -1586,7 +1589,7 @@ StrongARMState *sa1110_init(MemoryRegion *sysmem,
     StrongARMState *s;
     int i;
 
-    s = g_malloc0(sizeof(StrongARMState));
+    s = g_new0(StrongARMState, 1);
 
     if (!rev) {
         rev = "sa1110-b5";
@@ -1604,9 +1607,8 @@ StrongARMState *sa1110_init(MemoryRegion *sysmem,
         exit(1);
     }
 
-    memory_region_init_ram(&s->sdram, NULL, "strongarm.sdram", sdram_size,
-                           &error_abort);
-    vmstate_register_ram_global(&s->sdram);
+    memory_region_allocate_system_memory(&s->sdram, NULL, "strongarm.sdram",
+                                         sdram_size);
     memory_region_add_subregion(sysmem, SA_SDCS0, &s->sdram);
 
     s->pic = sysbus_create_varargs("strongarm_pic", 0x90050000,

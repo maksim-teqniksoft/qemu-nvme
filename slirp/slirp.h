@@ -1,11 +1,9 @@
 #ifndef __COMMON_H__
 #define __COMMON_H__
 
-#include "config-host.h"
 #include "slirp_config.h"
 
 #ifdef _WIN32
-# include <inttypes.h>
 
 typedef char *caddr_t;
 
@@ -16,50 +14,36 @@ typedef char *caddr_t;
 # include <iphlpapi.h>
 
 #else
-# define ioctlsocket ioctl
-# define closesocket(s) close(s)
 # if !defined(__HAIKU__)
 #  define O_BINARY 0
 # endif
 #endif
 
-#include <sys/types.h>
 #ifdef HAVE_SYS_BITYPES_H
 # include <sys/bitypes.h>
 #endif
 
-#include <sys/time.h>
 
 #ifdef HAVE_UNISTD_H
-# include <unistd.h>
 #endif
 
 #ifdef HAVE_STDLIB_H
-# include <stdlib.h>
 #endif
 
-#include <stdio.h>
-#include <errno.h>
 
 #ifndef HAVE_MEMMOVE
 #define memmove(x, y, z) bcopy(y, x, z)
 #endif
 
 #if TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
 #else
 # ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
 # else
-#  include <time.h>
 # endif
 #endif
 
 #ifdef HAVE_STRING_H
-# include <string.h>
 #else
-# include <strings.h>
 #endif
 
 #ifndef _WIN32
@@ -82,11 +66,9 @@ void *malloc(size_t arg);
 void free(void *ptr);
 #endif
 
-#include <fcntl.h>
 #ifndef NO_UNIX_SOCKETS
 #include <sys/un.h>
 #endif
-#include <signal.h>
 #ifdef HAVE_SYS_SIGNAL_H
 # include <sys/signal.h>
 #endif
@@ -115,12 +97,10 @@ void free(void *ptr);
 #endif
 
 #ifdef __STDC__
-#include <stdarg.h>
 #else
 #include <varargs.h>
 #endif
 
-#include <sys/stat.h>
 
 /* Avoid conflicting with the libc insque() and remque(), which
    have different prototypes. */
@@ -135,6 +115,7 @@ void free(void *ptr);
 
 #include "qemu/queue.h"
 #include "qemu/sockets.h"
+#include "net/eth.h"
 
 #include "libslirp.h"
 #include "ip.h"
@@ -157,12 +138,6 @@ void free(void *ptr);
 
 #include "bootp.h"
 #include "tftp.h"
-
-#define ETH_ALEN 6
-#define ETH_HLEN 14
-
-#define ETH_P_IP  0x0800        /* Internet Protocol packet  */
-#define ETH_P_ARP 0x0806        /* Address Resolution packet */
 
 #define ARPOP_REQUEST 1         /* ARP request */
 #define ARPOP_REPLY   2         /* ARP reply   */
@@ -332,7 +307,7 @@ void tcp_respond(struct tcpcb *, register struct tcpiphdr *, register struct mbu
 struct tcpcb * tcp_newtcpcb(struct socket *);
 struct tcpcb * tcp_close(register struct tcpcb *);
 void tcp_sockclosed(struct tcpcb *);
-int tcp_fconnect(struct socket *);
+int tcp_fconnect(struct socket *, unsigned short af);
 void tcp_connect(struct socket *);
 int tcp_attach(struct socket *);
 uint8_t tcp_tos(struct socket *);

@@ -101,6 +101,7 @@
  * tune the exact settings.
  */
 
+#include "qemu/osdep.h"
 #include <block/block_int.h>
 #include <block/qapi.h>
 #include <exec/memory.h>
@@ -539,10 +540,11 @@ static void nvme_rw_cb(void *opaque, int ret)
     NvmeCQueue *cq = n->cq[sq->cqid];
     NvmeNamespace *ns = req->ns;
 
-    block_acct_done(blk_get_stats(n->conf.blk), &req->acct);
     if (!ret) {
+        block_acct_done(blk_get_stats(n->conf.blk), &req->acct);
         req->status = NVME_SUCCESS;
     } else {
+        block_acct_failed(blk_get_stats(n->conf.blk), &req->acct);
         req->status = NVME_INTERNAL_DEV_ERROR;
     }
     if (req->status != NVME_SUCCESS) {
@@ -1875,6 +1877,13 @@ static void nvme_write_bar(NvmeCtrl *n, hwaddr offset, uint64_t data,
         n->bar.intmc = n->bar.intms;
         break;
     case 0x14:
+        /* Windows first sends data, then sends enable bit */
+        if (!NVME_CC_EN(data) && !NVME_CC_EN(n->bar.cc) &&
+            !NVME_CC_SHN(data) && !NVME_CC_SHN(n->bar.cc))
+        {
+            n->bar.cc = data;
+        }
+
         if (NVME_CC_EN(data) && !NVME_CC_EN(n->bar.cc)) {
             n->bar.cc = data;
             if (nvme_start_ctrl(n)) {
@@ -2166,6 +2175,9 @@ static void nvme_init_ctrl(NvmeCtrl *n)
     id->psd[0].mp = cpu_to_le16(0x9c4);
     id->psd[0].enlat = cpu_to_le32(0x10);
     id->psd[0].exlat = cpu_to_le32(0x4);
+    if (blk_enable_write_cache(n->conf.blk)) {
+        id->vwc = 1;
+    }
 
     n->features.arbitration     = 0x1f0f0706;
     n->features.power_mgmt      = 0;
@@ -2254,7 +2266,7 @@ static int nvme_init(PCIDevice *pci_dev)
     }
 
     n->start_time = time(NULL);
-    n->reg_size = 1 << qemu_fls(0x1004 + 2 * (n->num_queues + 1) * 4);
+    n->reg_size = pow2ceil(0x1004 + 2 * (n->num_queues + 1) * 4);
     n->ns_size = bs_size / (uint64_t)n->num_namespaces;
 
     n->sq = g_malloc0(sizeof(*n->sq)*n->num_queues);
@@ -2346,45 +2358,13 @@ static void nvme_class_init(ObjectClass *oc, void *data)
     dc->vmsd = &nvme_vmstate;
 }
 
-static void nvme_get_bootindex(Object *obj, Visitor *v, void *opaque,
-                                  const char *name, Error **errp)
-{
-    NvmeCtrl *s = NVME(obj);
-
-    visit_type_int32(v, &s->conf.bootindex, name, errp);
-}
-
-static void nvme_set_bootindex(Object *obj, Visitor *v, void *opaque,
-                                  const char *name, Error **errp)
-{
-    NvmeCtrl *s = NVME(obj);
-    int32_t boot_index;
-    Error *local_err = NULL;
-
-    visit_type_int32(v, &boot_index, name, &local_err);
-    if (local_err) {
-        goto out;
-    }
-    /* check whether bootindex is present in fw_boot_order list  */
-    check_boot_index(boot_index, &local_err);
-    if (local_err) {
-        goto out;
-    }
-    /* change bootindex to a new one */
-    s->conf.bootindex = boot_index;
-
-out:
-    if (local_err) {
-        error_propagate(errp, local_err);
-    }
-}
-
 static void nvme_instance_init(Object *obj)
 {
-    object_property_add(obj, "bootindex", "int32",
-                        nvme_get_bootindex,
-                        nvme_set_bootindex, NULL, NULL, NULL);
-    object_property_set_int(obj, -1, "bootindex", NULL);
+    NvmeCtrl *s = NVME(obj);
+
+    device_add_bootindex_property(obj, &s->conf.bootindex,
+                                  "bootindex", "/namespace@1,0",
+                                  DEVICE(obj), &error_abort);
 }
 
 static const TypeInfo nvme_info = {

@@ -31,7 +31,7 @@
    and the small letter tells about the operand size.  Refer to
    the Intel manual for details.  */
 
-#include <stdlib.h>
+#include "qemu/osdep.h"
 #include "disas/bfd.h"
 /* include/opcode/i386.h r1.78 */
 
@@ -357,7 +357,7 @@ fetch_data(struct disassemble_info *info, bfd_byte *addr)
 #define Rd { OP_R, d_mode }
 #define Rm { OP_R, m_mode }
 #define Ib { OP_I, b_mode }
-#define sIb { OP_sI, b_mode }	/* sign extened byte */
+#define sIb { OP_sI, b_mode }	/* sign extended byte */
 #define Iv { OP_I, v_mode }
 #define Iq { OP_I, q_mode }
 #define Iv64 { OP_I64, v_mode }

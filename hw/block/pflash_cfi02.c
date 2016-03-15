@@ -35,6 +35,7 @@
  * It does not implement multiple sectors erase
  */
 
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/block/flash.h"
 #include "qemu/timer.h"
@@ -744,6 +745,7 @@ static void pflash_cfi02_class_init(ObjectClass *klass, void *data)
 
     dc->realize = pflash_cfi02_realize;
     dc->props = pflash_cfi02_properties;
+    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
 
 static const TypeInfo pflash_cfi02_info = {
@@ -772,8 +774,8 @@ pflash_t *pflash_cfi02_register(hwaddr base,
 {
     DeviceState *dev = qdev_create(NULL, TYPE_CFI_PFLASH02);
 
-    if (blk && qdev_prop_set_drive(dev, "drive", blk)) {
-        abort();
+    if (blk) {
+        qdev_prop_set_drive(dev, "drive", blk, &error_abort);
     }
     qdev_prop_set_uint32(dev, "num-blocks", nb_blocs);
     qdev_prop_set_uint32(dev, "sector-length", sector_len);

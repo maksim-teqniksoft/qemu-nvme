@@ -41,6 +41,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>
  */
 
+#include "qemu/osdep.h"
 #include "hw/pci/pci.h"
 #include "hw/i386/ich9.h"
 
@@ -61,10 +62,7 @@ static int i82801b11_bridge_initfn(PCIDevice *d)
 {
     int rc;
 
-    rc = pci_bridge_initfn(d, TYPE_PCI_BUS);
-    if (rc < 0) {
-        return rc;
-    }
+    pci_bridge_initfn(d, TYPE_PCI_BUS);
 
     rc = pci_bridge_ssvid_init(d, I82801ba_SSVID_OFFSET,
                                I82801ba_SSVID_SVID, I82801ba_SSVID_SSID);
@@ -100,27 +98,6 @@ static const TypeInfo i82801b11_bridge_info = {
     .instance_size = sizeof(I82801b11Bridge),
     .class_init    = i82801b11_bridge_class_init,
 };
-
-PCIBus *ich9_d2pbr_init(PCIBus *bus, int devfn, int sec_bus)
-{
-    PCIDevice *d;
-    PCIBridge *br;
-    char buf[16];
-    DeviceState *qdev;
-
-    d = pci_create_multifunction(bus, devfn, true, "i82801b11-bridge");
-    if (!d) {
-        return NULL;
-    }
-    br = PCI_BRIDGE(d);
-    qdev = DEVICE(d);
-
-    snprintf(buf, sizeof(buf), "pci.%d", sec_bus);
-    pci_bridge_map_irq(br, buf, pci_swizzle_map_irq_fn);
-    qdev_init_nofail(qdev);
-
-    return pci_bridge_get_sec_bus(br);
-}
 
 static void d2pbr_register(void)
 {

@@ -17,7 +17,9 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "hw/hw.h"
+#include "qemu/error-report.h"
 #include "qemu/timer.h"
 #include "ui/qemu-spice.h"
 
@@ -115,7 +117,8 @@ static int rate_get_samples (struct audio_pcm_info *info, SpiceRateCtl *rate)
 
 /* playback */
 
-static int line_out_init (HWVoiceOut *hw, struct audsettings *as)
+static int line_out_init(HWVoiceOut *hw, struct audsettings *as,
+                         void *drv_opaque)
 {
     SpiceVoiceOut *out = container_of (hw, SpiceVoiceOut, hw);
     struct audsettings settings;
@@ -243,7 +246,7 @@ static int line_out_ctl (HWVoiceOut *hw, int cmd, ...)
 
 /* record */
 
-static int line_in_init (HWVoiceIn *hw, struct audsettings *as)
+static int line_in_init(HWVoiceIn *hw, struct audsettings *as, void *drv_opaque)
 {
     SpiceVoiceIn *in = container_of (hw, SpiceVoiceIn, hw);
     struct audsettings settings;

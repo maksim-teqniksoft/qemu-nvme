@@ -38,6 +38,7 @@
  * terms and conditions of the copyright.
  */
 
+#include "qemu/osdep.h"
 #include <slirp.h>
 
 /* patchable/settable parameters for tcp */
@@ -224,7 +225,7 @@ tcp_newtcpcb(struct socket *so)
 struct tcpcb *tcp_drop(struct tcpcb *tp, int err)
 {
 	DEBUG_CALL("tcp_drop");
-	DEBUG_ARG("tp = %lx", (long)tp);
+	DEBUG_ARG("tp = %p", tp);
 	DEBUG_ARG("errno = %d", errno);
 
 	if (TCPS_HAVERCVDSYN(tp->t_state)) {
@@ -249,7 +250,7 @@ tcp_close(struct tcpcb *tp)
 	register struct mbuf *m;
 
 	DEBUG_CALL("tcp_close");
-	DEBUG_ARG("tp = %lx", (long )tp);
+	DEBUG_ARG("tp = %p", tp);
 
 	/* free the reassembly queue, if any */
 	t = tcpfrag_list_first(tp);
@@ -290,7 +291,7 @@ tcp_sockclosed(struct tcpcb *tp)
 {
 
 	DEBUG_CALL("tcp_sockclosed");
-	DEBUG_ARG("tp = %lx", (long)tp);
+	DEBUG_ARG("tp = %p", tp);
 
 	switch (tp->t_state) {
 
@@ -324,40 +325,27 @@ tcp_sockclosed(struct tcpcb *tp)
  * nonblocking.  Connect returns after the SYN is sent, and does
  * not wait for ACK+SYN.
  */
-int tcp_fconnect(struct socket *so)
+int tcp_fconnect(struct socket *so, unsigned short af)
 {
-  Slirp *slirp = so->slirp;
   int ret=0;
 
   DEBUG_CALL("tcp_fconnect");
-  DEBUG_ARG("so = %lx", (long )so);
+  DEBUG_ARG("so = %p", so);
 
-  if( (ret = so->s = qemu_socket(AF_INET,SOCK_STREAM,0)) >= 0) {
+  ret = so->s = qemu_socket(af, SOCK_STREAM, 0);
+  if (ret >= 0) {
     int opt, s=so->s;
-    struct sockaddr_in addr;
+    struct sockaddr_storage addr;
 
     qemu_set_nonblock(s);
     socket_set_fast_reuse(s);
     opt = 1;
     qemu_setsockopt(s, SOL_SOCKET, SO_OOBINLINE, &opt, sizeof(opt));
 
-    addr.sin_family = AF_INET;
-    if ((so->so_faddr.s_addr & slirp->vnetwork_mask.s_addr) ==
-        slirp->vnetwork_addr.s_addr) {
-      /* It's an alias */
-      if (so->so_faddr.s_addr == slirp->vnameserver_addr.s_addr) {
-	if (get_dns_addr(&addr.sin_addr) < 0)
-	  addr.sin_addr = loopback_addr;
-      } else {
-	addr.sin_addr = loopback_addr;
-      }
-    } else
-      addr.sin_addr = so->so_faddr;
-    addr.sin_port = so->so_fport;
+    addr = so->fhost.ss;
+    DEBUG_CALL(" connect()ing")
+    sotranslate_out(so, &addr);
 
-    DEBUG_MISC((dfd, " connect()ing, addr.sin_port=%d, "
-		"addr.sin_addr.s_addr=%.16s\n",
-		ntohs(addr.sin_port), inet_ntoa(addr.sin_addr)));
     /* We don't care what port we get */
     ret = connect(s,(struct sockaddr *)&addr,sizeof (addr));
 
@@ -393,7 +381,7 @@ void tcp_connect(struct socket *inso)
     int s, opt;
 
     DEBUG_CALL("tcp_connect");
-    DEBUG_ARG("inso = %lx", (long)inso);
+    DEBUG_ARG("inso = %p", inso);
 
     /*
      * If it's an SS_ACCEPTONCE socket, no need to socreate()
@@ -413,6 +401,7 @@ void tcp_connect(struct socket *inso)
             free(so); /* NOT sofree */
             return;
         }
+        so->so_lfamily = AF_INET;
         so->so_laddr = inso->so_laddr;
         so->so_lport = inso->so_lport;
     }
@@ -430,14 +419,8 @@ void tcp_connect(struct socket *inso)
     qemu_setsockopt(s, SOL_SOCKET, SO_OOBINLINE, &opt, sizeof(int));
     socket_set_nodelay(s);
 
-    so->so_fport = addr.sin_port;
-    so->so_faddr = addr.sin_addr;
-    /* Translate connections from localhost to the real hostname */
-    if (so->so_faddr.s_addr == 0 ||
-        (so->so_faddr.s_addr & loopback_mask) ==
-        (loopback_addr.s_addr & loopback_mask)) {
-        so->so_faddr = slirp->vhost_addr;
-    }
+    so->fhost.sin = addr;
+    sotranslate_accept(so);
 
     /* Close the accept() socket, set right state */
     if (inso->so_state & SS_FACCEPTONCE) {
@@ -564,8 +547,8 @@ tcp_emu(struct socket *so, struct mbuf *m)
 	char *bptr;
 
 	DEBUG_CALL("tcp_emu");
-	DEBUG_ARG("so = %lx", (long)so);
-	DEBUG_ARG("m = %lx", (long)m);
+	DEBUG_ARG("so = %p", so);
+	DEBUG_ARG("m = %p", m);
 
 	switch(so->so_emu) {
 		int x, i;
@@ -900,7 +883,7 @@ int tcp_ctl(struct socket *so)
     int do_pty;
 
     DEBUG_CALL("tcp_ctl");
-    DEBUG_ARG("so = %lx", (long )so);
+    DEBUG_ARG("so = %p", so);
 
     if (so->so_faddr.s_addr != slirp->vhost_addr.s_addr) {
         /* Check if it's pty_exec */

@@ -11,10 +11,13 @@
  *
  */
 
+#include "qemu/osdep.h"
 #include "trace.h"
 #include "block/block_int.h"
 #include "block/blockjob.h"
+#include "qapi/qmp/qerror.h"
 #include "qemu/ratelimit.h"
+#include "sysemu/block-backend.h"
 
 enum {
     /*
@@ -51,37 +54,39 @@ static int coroutine_fn stream_populate(BlockDriverState *bs,
     return bdrv_co_copy_on_readv(bs, sector_num, nb_sectors, &qiov);
 }
 
-static void close_unused_images(BlockDriverState *top, BlockDriverState *base,
-                                const char *base_id)
+typedef struct {
+    int ret;
+    bool reached_end;
+} StreamCompleteData;
+
+static void stream_complete(BlockJob *job, void *opaque)
 {
-    BlockDriverState *intermediate;
-    intermediate = top->backing_hd;
+    StreamBlockJob *s = container_of(job, StreamBlockJob, common);
+    StreamCompleteData *data = opaque;
+    BlockDriverState *base = s->base;
 
-    /* Must assign before bdrv_delete() to prevent traversing dangling pointer
-     * while we delete backing image instances.
-     */
-    bdrv_set_backing_hd(top, base);
-
-    while (intermediate) {
-        BlockDriverState *unused;
-
-        /* reached base */
-        if (intermediate == base) {
-            break;
+    if (!block_job_is_cancelled(&s->common) && data->reached_end &&
+        data->ret == 0) {
+        const char *base_id = NULL, *base_fmt = NULL;
+        if (base) {
+            base_id = s->backing_file_str;
+            if (base->drv) {
+                base_fmt = base->drv->format_name;
+            }
         }
-
-        unused = intermediate;
-        intermediate = intermediate->backing_hd;
-        bdrv_set_backing_hd(unused, NULL);
-        bdrv_unref(unused);
+        data->ret = bdrv_change_backing_file(job->bs, base_id, base_fmt);
+        bdrv_set_backing_hd(job->bs, base);
     }
 
-    bdrv_refresh_limits(top, NULL);
+    g_free(s->backing_file_str);
+    block_job_completed(&s->common, data->ret);
+    g_free(data);
 }
 
 static void coroutine_fn stream_run(void *opaque)
 {
     StreamBlockJob *s = opaque;
+    StreamCompleteData *data;
     BlockDriverState *bs = s->common.bs;
     BlockDriverState *base = s->base;
     int64_t sector_num, end;
@@ -90,7 +95,7 @@ static void coroutine_fn stream_run(void *opaque)
     int n = 0;
     void *buf;
 
-    if (!bs->backing_hd) {
+    if (!bs->backing) {
         block_job_completed(&s->common, 0);
         return;
     }
@@ -135,7 +140,7 @@ wait:
         } else if (ret >= 0) {
             /* Copy if allocated in the intermediate images.  Limit to the
              * known-unallocated area [sector_num, sector_num+n).  */
-            ret = bdrv_is_allocated_above(bs->backing_hd, base,
+            ret = bdrv_is_allocated_above(backing_bs(bs), base,
                                           sector_num, n, &n);
 
             /* Finish early if end of backing file has been reached */
@@ -183,21 +188,13 @@ wait:
     /* Do not remove the backing file if an error was there but ignored.  */
     ret = error;
 
-    if (!block_job_is_cancelled(&s->common) && sector_num == end && ret == 0) {
-        const char *base_id = NULL, *base_fmt = NULL;
-        if (base) {
-            base_id = s->backing_file_str;
-            if (base->drv) {
-                base_fmt = base->drv->format_name;
-            }
-        }
-        ret = bdrv_change_backing_file(bs, base_id, base_fmt);
-        close_unused_images(bs, base, base_id);
-    }
-
     qemu_vfree(buf);
-    g_free(s->backing_file_str);
-    block_job_completed(&s->common, ret);
+
+    /* Modify backing chain and close BDSes in main loop */
+    data = g_malloc(sizeof(*data));
+    data->ret = ret;
+    data->reached_end = sector_num == end;
+    block_job_defer_to_main_loop(&s->common, stream_complete, data);
 }
 
 static void stream_set_speed(BlockJob *job, int64_t speed, Error **errp)
@@ -205,7 +202,7 @@ static void stream_set_speed(BlockJob *job, int64_t speed, Error **errp)
     StreamBlockJob *s = container_of(job, StreamBlockJob, common);
 
     if (speed < 0) {
-        error_set(errp, QERR_INVALID_PARAMETER, "speed");
+        error_setg(errp, QERR_INVALID_PARAMETER, "speed");
         return;
     }
     ratelimit_set_speed(&s->limit, speed / BDRV_SECTOR_SIZE, SLICE_TIME);
@@ -227,8 +224,8 @@ void stream_start(BlockDriverState *bs, BlockDriverState *base,
 
     if ((on_error == BLOCKDEV_ON_ERROR_STOP ||
          on_error == BLOCKDEV_ON_ERROR_ENOSPC) &&
-        !bdrv_iostatus_is_enabled(bs)) {
-        error_set(errp, QERR_INVALID_PARAMETER, "on-error");
+        (!bs->blk || !blk_iostatus_is_enabled(bs->blk))) {
+        error_setg(errp, QERR_INVALID_PARAMETER, "on-error");
         return;
     }
 

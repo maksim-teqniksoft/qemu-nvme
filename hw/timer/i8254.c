@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/i386/pc.h"
 #include "hw/isa/isa.h"
@@ -196,6 +197,12 @@ static uint64_t pit_ioport_read(void *opaque, hwaddr addr,
     PITChannelState *s;
 
     addr &= 3;
+
+    if (addr == 3) {
+        /* Mode/Command register is write only, read is ignored */
+        return 0;
+    }
+
     s = &pit->channels[addr];
     if (s->status_latched) {
         s->status_latched = 0;

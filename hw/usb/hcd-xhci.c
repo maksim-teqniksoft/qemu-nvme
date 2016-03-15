@@ -18,6 +18,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
@@ -459,6 +460,7 @@ struct XHCIState {
     uint32_t numintrs;
     uint32_t numslots;
     uint32_t flags;
+    uint32_t max_pstreams_mask;
 
     /* Operational Registers */
     uint32_t usbcmd;
@@ -500,6 +502,7 @@ enum xhci_flags {
     XHCI_FLAG_USE_MSI_X,
     XHCI_FLAG_SS_FIRST,
     XHCI_FLAG_FORCE_PCIE_ENDCAP,
+    XHCI_FLAG_ENABLE_STREAMS,
 };
 
 static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
@@ -1384,7 +1387,7 @@ static void xhci_init_epctx(XHCIEPContext *epctx,
     epctx->pctx = pctx;
     epctx->max_psize = ctx[1]>>16;
     epctx->max_psize *= 1+((ctx[1]>>8)&0xff);
-    epctx->max_pstreams = (ctx[0] >> 10) & 0xf;
+    epctx->max_pstreams = (ctx[0] >> 10) & epctx->xhci->max_pstreams_mask;
     epctx->lsa = (ctx[0] >> 15) & 1;
     if (epctx->max_pstreams) {
         xhci_alloc_streams(epctx, dequeue);
@@ -1451,9 +1454,7 @@ static int xhci_ep_nuke_one_xfer(XHCITransfer *t, TRBCCode report)
         t->running_retry = 0;
         killed = 1;
     }
-    if (t->trbs) {
-        g_free(t->trbs);
-    }
+    g_free(t->trbs);
 
     t->trbs = NULL;
     t->trb_count = t->trb_alloced = 0;
@@ -1791,6 +1792,14 @@ static void xhci_xfer_report(XHCITransfer *xfer)
                 return;
             }
         }
+
+        switch (TRB_TYPE(*trb)) {
+        case TR_SETUP:
+            reported = 0;
+            shortpkt = 0;
+            break;
+        }
+
     }
 }
 
@@ -2180,7 +2189,7 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
             xfer->trbs = NULL;
         }
         if (!xfer->trbs) {
-            xfer->trbs = g_malloc(sizeof(XHCITRB) * length);
+            xfer->trbs = g_new(XHCITRB, length);
             xfer->trb_alloced = length;
         }
         xfer->trb_count = length;
@@ -2193,7 +2202,6 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
         if (epid == 1) {
             if (xhci_fire_ctl_transfer(xhci, xfer) >= 0) {
                 epctx->next_xfer = (epctx->next_xfer + 1) % TD_QUEUE;
-                ep = xfer->packet.ep;
             } else {
                 DPRINTF("xhci: error firing CTL transfer\n");
             }
@@ -2260,6 +2268,9 @@ static USBPort *xhci_lookup_uport(XHCIState *xhci, uint32_t *slot_ctx)
     int i, pos, port;
 
     port = (slot_ctx[1]>>16) & 0xFF;
+    if (port < 1 || port > xhci->numports) {
+        return NULL;
+    }
     port = xhci->ports[port-1].uport->index+1;
     pos = snprintf(path, sizeof(path), "%d", port);
     for (i = 0; i < 5; i++) {
@@ -2956,9 +2967,9 @@ static uint64_t xhci_cap_read(void *ptr, hwaddr reg, unsigned size)
         break;
     case 0x10: /* HCCPARAMS */
         if (sizeof(dma_addr_t) == 4) {
-            ret = 0x00087000;
+            ret = 0x00080000 | (xhci->max_pstreams_mask << 12);
         } else {
-            ret = 0x00087001;
+            ret = 0x00080001 | (xhci->max_pstreams_mask << 12);
         }
         break;
     case 0x14: /* DBOFF */
@@ -3562,7 +3573,7 @@ static void usb_xhci_init(XHCIState *xhci)
     }
 }
 
-static int usb_xhci_initfn(struct PCIDevice *dev)
+static void usb_xhci_realize(struct PCIDevice *dev, Error **errp)
 {
     int i, ret;
 
@@ -3589,6 +3600,11 @@ static int usb_xhci_initfn(struct PCIDevice *dev)
     }
     if (xhci->numslots < 1) {
         xhci->numslots = 1;
+    }
+    if (xhci_get_flag(xhci, XHCI_FLAG_ENABLE_STREAMS)) {
+        xhci->max_pstreams_mask = 7; /* == 256 primary streams */
+    } else {
+        xhci->max_pstreams_mask = 0;
     }
 
     xhci->mfwrap_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, xhci_mfwrap_timer, xhci);
@@ -3636,8 +3652,6 @@ static int usb_xhci_initfn(struct PCIDevice *dev)
                   &xhci->mem, 0, OFF_MSIX_PBA,
                   0x90);
     }
-
-    return 0;
 }
 
 static void usb_xhci_exit(PCIDevice *dev)
@@ -3699,6 +3713,12 @@ static int usb_xhci_post_load(void *opaque, int version_id)
             xhci_mask64(ldq_le_pci_dma(pci_dev, dcbaap + 8 * slotid));
         xhci_dma_read_u32s(xhci, slot->ctx, slot_ctx, sizeof(slot_ctx));
         slot->uport = xhci_lookup_uport(xhci, slot_ctx);
+        if (!slot->uport) {
+            /* should not happen, but may trigger on guest bugs */
+            slot->enabled = 0;
+            slot->addressed = 0;
+            continue;
+        }
         assert(slot->uport && slot->uport->dev);
 
         for (epid = 1; epid <= 31; epid++) {
@@ -3839,7 +3859,7 @@ static const VMStateDescription vmstate_xhci = {
 
         /* Runtime Registers & state */
         VMSTATE_INT64(mfindex_start,  XHCIState),
-        VMSTATE_TIMER(mfwrap_timer,   XHCIState),
+        VMSTATE_TIMER_PTR(mfwrap_timer,   XHCIState),
         VMSTATE_STRUCT(cmd_ring, XHCIState, 1, vmstate_xhci_ring, XHCIRing),
 
         VMSTATE_END_OF_LIST()
@@ -3853,6 +3873,8 @@ static Property xhci_properties[] = {
                     XHCIState, flags, XHCI_FLAG_SS_FIRST, true),
     DEFINE_PROP_BIT("force-pcie-endcap", XHCIState, flags,
                     XHCI_FLAG_FORCE_PCIE_ENDCAP, false),
+    DEFINE_PROP_BIT("streams", XHCIState, flags,
+                    XHCI_FLAG_ENABLE_STREAMS, true),
     DEFINE_PROP_UINT32("intrs", XHCIState, numintrs, MAXINTRS),
     DEFINE_PROP_UINT32("slots", XHCIState, numslots, MAXSLOTS),
     DEFINE_PROP_UINT32("p2",    XHCIState, numports_2, 4),
@@ -3869,7 +3891,7 @@ static void xhci_class_init(ObjectClass *klass, void *data)
     dc->props   = xhci_properties;
     dc->reset   = xhci_reset;
     set_bit(DEVICE_CATEGORY_USB, dc->categories);
-    k->init         = usb_xhci_initfn;
+    k->realize      = usb_xhci_realize;
     k->exit         = usb_xhci_exit;
     k->vendor_id    = PCI_VENDOR_ID_NEC;
     k->device_id    = PCI_DEVICE_ID_NEC_UPD720200;

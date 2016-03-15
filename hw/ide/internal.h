@@ -289,6 +289,7 @@ typedef struct IDEDMAOps IDEDMAOps;
 #define ATAPI_INT_REASON_TAG            0xf8
 
 /* same constants as bochs */
+#define ASC_NO_SEEK_COMPLETE                 0x02
 #define ASC_ILLEGAL_OPCODE                   0x20
 #define ASC_LOGICAL_BLOCK_OOR                0x21
 #define ASC_INV_FIELD_IN_CMD_PACKET          0x24
@@ -296,6 +297,7 @@ typedef struct IDEDMAOps IDEDMAOps;
 #define ASC_INCOMPATIBLE_FORMAT              0x30
 #define ASC_MEDIUM_NOT_PRESENT               0x3a
 #define ASC_SAVING_PARAMETERS_NOT_SUPPORTED  0x39
+#define ASC_DATA_PHASE_ERROR                 0x4b
 #define ASC_MEDIA_REMOVAL_PREVENTED          0x53
 
 #define CFA_NO_ERROR            0x00
@@ -322,6 +324,8 @@ typedef void EndTransferFunc(IDEState *);
 typedef void DMAStartFunc(IDEDMA *, IDEState *, BlockCompletionFunc *);
 typedef void DMAVoidFunc(IDEDMA *);
 typedef int DMAIntFunc(IDEDMA *, int);
+typedef int32_t DMAInt32Func(IDEDMA *, int32_t len);
+typedef void DMAu32Func(IDEDMA *, uint32_t);
 typedef void DMAStopFunc(IDEDMA *, bool);
 typedef void DMARestartFunc(void *, int, RunState);
 
@@ -338,6 +342,16 @@ enum ide_dma_cmd {
 
 #define ide_cmd_is_read(s) \
 	((s)->dma_cmd == IDE_DMA_READ)
+
+typedef struct IDEBufferedRequest {
+    QLIST_ENTRY(IDEBufferedRequest) list;
+    struct iovec iov;
+    QEMUIOVector qiov;
+    QEMUIOVector *original_qiov;
+    BlockCompletionFunc *original_cb;
+    void *original_opaque;
+    bool orphaned;
+} IDEBufferedRequest;
 
 /* NOTE: IDEState represents in fact one drive */
 struct IDEState {
@@ -384,7 +398,7 @@ struct IDEState {
     uint8_t cdrom_changed;
     int packet_transfer_size;
     int elementary_transfer_size;
-    int io_buffer_index;
+    int32_t io_buffer_index;
     int lba;
     int cd_sector_size;
     int atapi_dma; /* true if dma is requested for the packet cmd */
@@ -392,9 +406,10 @@ struct IDEState {
     BlockAIOCB *pio_aiocb;
     struct iovec iov;
     QEMUIOVector qiov;
+    QLIST_HEAD(, IDEBufferedRequest) buffered_requests;
     /* ATA DMA state */
-    int io_buffer_offset;
-    int io_buffer_size;
+    uint64_t io_buffer_offset;
+    int32_t io_buffer_size;
     QEMUSGList sg;
     /* PIO transfer handling */
     int req_nb_sectors; /* number of sectors per interrupt */
@@ -404,8 +419,8 @@ struct IDEState {
     uint8_t *io_buffer;
     /* PIO save/restore */
     int32_t io_buffer_total_len;
-    int cur_io_buffer_offset;
-    int cur_io_buffer_len;
+    int32_t cur_io_buffer_offset;
+    int32_t cur_io_buffer_len;
     uint8_t end_transfer_fn_idx;
     QEMUTimer *sector_write_timer; /* only used for win2k install hack */
     uint32_t irq_count; /* counts IRQs when using win2k install hack */
@@ -429,12 +444,13 @@ struct IDEState {
 struct IDEDMAOps {
     DMAStartFunc *start_dma;
     DMAVoidFunc *start_transfer;
-    DMAIntFunc *prepare_buf;
+    DMAInt32Func *prepare_buf;
+    DMAu32Func *commit_buf;
     DMAIntFunc *rw_buf;
-    DMAIntFunc *set_unit;
+    DMAVoidFunc *restart;
+    DMAVoidFunc *restart_dma;
     DMAStopFunc *set_inactive;
     DMAVoidFunc *cmd_done;
-    DMARestartFunc *restart_cb;
     DMAVoidFunc *reset;
 };
 
@@ -450,6 +466,8 @@ struct IDEBus {
     IDEDevice *master;
     IDEDevice *slave;
     IDEState ifs[2];
+    QEMUBH *bh;
+
     int bus_id;
     int max_units;
     IDEDMA *dma;
@@ -458,6 +476,9 @@ struct IDEBus {
     qemu_irq irq;
 
     int error_status;
+    uint8_t retry_unit;
+    int64_t retry_sector_num;
+    uint32_t retry_nsector;
 };
 
 #define TYPE_IDE_DEVICE "ide-device"
@@ -490,6 +511,7 @@ struct IDEDevice {
 #define IDE_RETRY_READ  0x20
 #define IDE_RETRY_FLUSH 0x40
 #define IDE_RETRY_TRIM 0x80
+#define IDE_RETRY_HBA  0x100
 
 static inline IDEState *idebus_active_if(IDEBus *bus)
 {
@@ -517,15 +539,21 @@ extern const VMStateDescription vmstate_ide_drive;
 #define VMSTATE_IDE_DRIVES(_field, _state) \
     VMSTATE_STRUCT_ARRAY(_field, _state, 2, 3, vmstate_ide_drive, IDEState)
 
+#define VMSTATE_IDE_DRIVE(_field, _state) \
+    VMSTATE_STRUCT(_field, _state, 1, vmstate_ide_drive, IDEState)
+
 void ide_bus_reset(IDEBus *bus);
 int64_t ide_get_sector(IDEState *s);
 void ide_set_sector(IDEState *s, int64_t sector_num);
 
 void ide_start_dma(IDEState *s, BlockCompletionFunc *cb);
+void dma_buf_commit(IDEState *s, uint32_t tx_bytes);
 void ide_dma_error(IDEState *s);
+void ide_abort_command(IDEState *s);
 
 void ide_atapi_cmd_ok(IDEState *s);
 void ide_atapi_cmd_error(IDEState *s, int sense_key, int asc);
+void ide_atapi_dma_restart(IDEState *s);
 void ide_atapi_io_error(IDEState *s, int ret);
 
 void ide_ioport_write(void *opaque, uint32_t addr, uint32_t val);
@@ -544,12 +572,9 @@ int ide_init_drive(IDEState *s, BlockBackend *blk, IDEDriveKind kind,
                    int chs_trans);
 void ide_init2(IDEBus *bus, qemu_irq irq);
 void ide_init_ioport(IDEBus *bus, ISADevice *isa, int iobase, int iobase2);
+void ide_register_restart_cb(IDEBus *bus);
 
 void ide_exec_cmd(IDEBus *bus, uint32_t val);
-void ide_dma_cb(void *opaque, int ret);
-void ide_sector_write(IDEState *s);
-void ide_sector_read(IDEState *s);
-void ide_flush_cache(IDEState *s);
 
 void ide_transfer_start(IDEState *s, uint8_t *buf, int size,
                         EndTransferFunc *end_transfer_func);
@@ -558,6 +583,10 @@ void ide_set_inactive(IDEState *s, bool more);
 BlockAIOCB *ide_issue_trim(BlockBackend *blk,
         int64_t sector_num, QEMUIOVector *qiov, int nb_sectors,
         BlockCompletionFunc *cb, void *opaque);
+BlockAIOCB *ide_buffered_readv(IDEState *s, int64_t sector_num,
+                               QEMUIOVector *iov, int nb_sectors,
+                               BlockCompletionFunc *cb, void *opaque);
+void ide_cancel_dma_sync(IDEState *s);
 
 /* hw/ide/atapi.c */
 void ide_atapi_cmd(IDEState *s);
