@@ -493,7 +493,7 @@ static void nvme_enqueue_event(NvmeCtrl *n, uint8_t event_type,
         return;
     }
 
-    event = (NvmeAsyncEvent *)g_malloc(sizeof(*event));
+    event = g_new0(NvmeAsyncEvent, 1);
     event->result.event_type = event_type;
     event->result.event_info = event_info;
     event->result.log_page   = log_page;
@@ -883,9 +883,7 @@ static void nvme_free_sq(NvmeSQueue *sq, NvmeCtrl *n)
     timer_del(sq->timer);
     timer_free(sq->timer);
     g_free(sq->io_req);
-    if (sq->prp_list) {
-        g_free(sq->prp_list);
-    }
+    g_free(sq->prp_list);
     if (sq->sqid) {
         g_free(sq);
     }
@@ -1032,9 +1030,7 @@ static void nvme_free_cq(NvmeCQueue *cq, NvmeCtrl *n)
     timer_del(cq->timer);
     timer_free(cq->timer);
     msix_vector_unuse(&n->parent_obj, cq->vector);
-    if (cq->prp_list) {
-        g_free(cq->prp_list);
-    }
+    g_free(cq->prp_list);
     if (cq->cqid) {
         g_free(cq);
     }
@@ -2269,8 +2265,8 @@ static int nvme_init(PCIDevice *pci_dev)
     n->reg_size = pow2ceil(0x1004 + 2 * (n->num_queues + 1) * 4);
     n->ns_size = bs_size / (uint64_t)n->num_namespaces;
 
-    n->sq = g_malloc0(sizeof(*n->sq)*n->num_queues);
-    n->cq = g_malloc0(sizeof(*n->cq)*n->num_queues);
+    n->sq = g_malloc0(sizeof(*n->sq) * n->num_queues);
+    n->cq = g_malloc0(sizeof(*n->cq) * n->num_queues);
     n->elpes = g_malloc0((n->elpe + 1) * sizeof(*n->elpes));
     n->aer_reqs = g_malloc0((n->aerl + 1) * sizeof(*n->aer_reqs));
     n->features.int_vector_config = g_malloc(n->num_queues *
