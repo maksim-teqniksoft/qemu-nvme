@@ -1818,12 +1818,6 @@ static void nvme_clear_ctrl(NvmeCtrl *n)
     n->features.temp_thresh = 0x14d;
     n->temp_warn_issued = 0;
     n->outstanding_aers = 0;
-
-    for (i = 0; i < ARRAY_SIZE(n->ns_all); i++) {
-        g_free(n->ns_all[i]);
-        n->ns_all[i] = NULL;
-        n->ns_attached[i] = NULL;
-    }
 }
 
 static int nvme_start_ctrl(NvmeCtrl *n)
@@ -2282,6 +2276,11 @@ static int nvme_init(PCIDevice *pci_dev)
 static void nvme_exit(PCIDevice *pci_dev)
 {
     NvmeCtrl *n = NVME(pci_dev);
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(n->ns_all); i++) {
+        g_free(n->ns_all[i]);
+    }
 
     nvme_clear_ctrl(n);
     g_free(n->features.int_vector_config);
