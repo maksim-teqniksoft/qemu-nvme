@@ -1628,6 +1628,17 @@ static uint16_t nvme_namespace_attach(NvmeCtrl *n, NvmeCmd *cmd)
     return NVME_SUCCESS;
 }
 
+static uint32_t nvme_get_number_of_namespaces(NvmeCtrl *n)
+{
+    uint32_t nsid = NVME_MAX_NUM_NAMESPACES;
+    for (; nsid > 0; --nsid) {
+        if (n->ns_all[nsid - 1] != NULL) {
+            break;
+        }
+    }
+    return nsid;
+}
+
 static uint16_t nvme_namespace_delete(NvmeCtrl *n, uint32_t nsid)
 {
     uint16_t status = nvme_check_nsid(n, nsid);
@@ -1645,6 +1656,8 @@ static uint16_t nvme_namespace_delete(NvmeCtrl *n, uint32_t nsid)
 
     n->ns_all[nsid - 1] = NULL;
     n->ns_attached[nsid - 1] = NULL;
+
+    n->id_ctrl.nn = cpu_to_le32(nvme_get_number_of_namespaces(n));
 
     return NVME_SUCCESS;
 }
