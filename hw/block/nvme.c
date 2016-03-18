@@ -1493,8 +1493,8 @@ static uint16_t nvme_format_namespace(NvmeNamespace *ns, uint8_t lba_idx,
 
     g_free(ns->util);
     g_free(ns->uncorrectable);
-    blks = ns->ctrl->ns_size / ((1 << ns->id_ns.lbaf[lba_idx].ds) +
-                ns->ctrl->meta);
+    blks = ns->blocks * BDRV_SECTOR_SIZE / ((1 << ns->id_ns.lbaf[lba_idx].ds) +
+                                            ns->ctrl->meta);
     ns->id_ns.flbas = lba_idx | meta_loc;
     ns->id_ns.nsze = cpu_to_le64(blks);
     ns->id_ns.ncap = ns->id_ns.nsze;
@@ -1662,14 +1662,118 @@ static uint16_t nvme_namespace_delete(NvmeCtrl *n, uint32_t nsid)
     return NVME_SUCCESS;
 }
 
-static uint16_t nvme_namespace_management(NvmeCtrl *n, NvmeCmd *cmd)
+static uint16_t nvme_namespace_create(NvmeCtrl *n, uint32_t *new_nsid,
+                                      uint64_t nsze, uint8_t flbas, uint8_t dps)
+{
+    NvmeNamespace *ns = g_new0(NvmeNamespace, 1);;
+    const uint8_t lba_index = NVME_ID_NS_FLBAS_INDEX(flbas);
+    const uint8_t meta_loc = flbas & 0x10;
+    const uint8_t pi = dps & DPS_TYPE_MASK;
+    const uint8_t pil = dps & DPS_FIRST_EIGHT;
+    const uint8_t sec_erase = 1;
+    const uint32_t nn = nvme_get_number_of_namespaces(n);
+    const uint32_t nsid = nn + 1;
+    const uint32_t block_size_shift = lba_index;
+    const uint64_t blocks = nsze << block_size_shift;
+    const uint64_t capacity = blk_getlength(n->conf.blk) / BDRV_SECTOR_SIZE;
+    uint16_t status;
+    uint64_t start_block;
+    unsigned int j;
+
+    if (ns == NULL) {
+        return NVME_INTERNAL_DEV_ERROR;
+    }
+    /* Check if we have a free NSID left */
+    if (nn >= NVME_MAX_NUM_NAMESPACES) {
+        g_free(ns);
+        return NVME_NSID_IS_UNAVAILABLE | NVME_DNR;
+    }
+    /* Find/check capacity */
+    if (nn > 0) {
+        const NvmeNamespace *last_ns = n->ns_all[nn - 1];
+        start_block = last_ns->start_block + last_ns->blocks;
+    } else {
+        start_block = 0;
+    }
+    if (capacity < (start_block + blocks)) {
+        g_free(ns);
+        return NVME_INSUFFICIENT_CAPACITY | NVME_DNR;
+    }
+    /* Initialize */
+    ns->ctrl = n;
+    ns->id = nsid;
+    ns->start_block = start_block;
+    ns->blocks = blocks;
+    ns->util = NULL;
+    ns->uncorrectable = NULL;
+
+    ns->id_ns.nsze = cpu_to_le64(nsze);
+    ns->id_ns.nuse = ns->id_ns.nsze;
+    ns->id_ns.ncap = ns->id_ns.nsze;
+    ns->id_ns.nsfeat = 0;
+    ns->id_ns.nlbaf = n->nlbaf - 1;
+    ns->id_ns.flbas = flbas;
+    ns->id_ns.mc = n->mc;
+    ns->id_ns.dpc = n->dpc;
+    ns->id_ns.dps = dps;
+
+    for (j = 0; j < n->nlbaf; j++) {
+        ns->id_ns.lbaf[j].ds = BDRV_SECTOR_BITS + j;
+    }
+
+    /* Format */
+    status = nvme_format_namespace(ns, lba_index, meta_loc, pil, pi, sec_erase);
+    if (status != NVME_SUCCESS) {
+        g_free(ns);
+        return NVME_NS_INVALID_FORMAT | NVME_DNR;
+    }
+    /* Make it valid */
+    n->ns_all[nsid - 1] = ns;
+    n->ns_attached[nsid - 1] = NULL;
+    /* Adjust 'Number of Namespaces'
+     * make NN = NSID since we allocate NSIDs in ascending order
+     * without defragmentation: new NSID is greater than any other
+     * that exists in the system at the moment.
+     */
+    n->id_ctrl.nn = cpu_to_le32(nsid);
+
+    /* Report NSID of the newly created namespace */
+    *new_nsid = cpu_to_le32(nsid);
+
+    return NVME_SUCCESS;
+}
+
+static uint16_t nvme_namespace_management(NvmeCtrl *n, NvmeCmd *cmd,
+                                          NvmeRequest *req)
 {
     unsigned int sel = le32_to_cpu(cmd->cdw10) & 0x0f;
     uint32_t nsid = le32_to_cpu(cmd->nsid);
+    NvmeIdNs id_ns;
+    uint16_t status;
+    uint64_t prp1 = le64_to_cpu(cmd->prp1);
+    uint64_t prp2 = le64_to_cpu(cmd->prp2);
 
     switch (sel) {
     case 0:                                                 /* Create */
-        return NVME_INVALID_OPCODE | NVME_DNR;
+        status = nvme_dma_write_prp(n, (uint8_t *)&id_ns, sizeof(id_ns),
+                                    prp1, prp2);
+        if (status != NVME_SUCCESS) {
+            return status;
+        } else {
+            uint64_t nsze = le64_to_cpu(id_ns.nsze);
+            uint64_t ncap = le64_to_cpu(id_ns.ncap);
+            uint8_t flbas = id_ns.flbas;
+            uint8_t dps = id_ns.dps;
+
+            if (nsze != ncap) {
+                return NVME_PROVISIONING_ERROR | NVME_DNR;
+            } else if (nsze == 0) {
+                return NVME_INVALID_FIELD | NVME_DNR;
+            }
+
+            return nvme_namespace_create(n, &(req->cqe.result),
+                                         nsze, flbas, dps);
+        }
     case 1:                                                 /* Delete */
         if (nsid == NVME_BROADCAST_NSID) {
             unsigned int i;
@@ -1724,7 +1828,7 @@ static uint16_t nvme_admin_cmd(NvmeCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         return NVME_INVALID_OPCODE | NVME_DNR;
     case NVME_ADM_CMD_NS_MANAGEMENT:
         if (n->oacs & NVME_OACS_NS) {
-            return nvme_namespace_management(n, cmd);
+            return nvme_namespace_management(n, cmd, req);
         }
         return NVME_INVALID_OPCODE | NVME_DNR;
     case NVME_ADM_CMD_ACTIVATE_FW:
@@ -2105,40 +2209,26 @@ static int nvme_check_constraints(NvmeCtrl *n)
 
 static void nvme_init_namespaces(NvmeCtrl *n)
 {
-    int i, j;
+    unsigned int i;
+    const uint64_t ns_size = blk_getlength(n->conf.blk) /
+        (BDRV_SECTOR_SIZE * n->num_namespaces);
+    const uint64_t nsze = ns_size >> n->lba_index;
+    const uint8_t flbas = n->lba_index | (n->extended << 4);
+    const uint8_t dps = n->dps;
 
     for (i = 0; i < n->num_namespaces; i++) {
-        uint64_t blks;
-        int lba_index;
-        NvmeNamespace *ns = g_new0(NvmeNamespace, 1);
-        NvmeIdNs *id_ns;
+        uint32_t nsid;
+        uint16_t status = nvme_namespace_create(n, &nsid, nsze, flbas, dps);
 
-        assert(ns != NULL);
-
-        id_ns = &ns->id_ns;
-        id_ns->nsfeat = 0;
-        id_ns->nlbaf = n->nlbaf - 1;
-        id_ns->flbas = n->lba_index | (n->extended << 4);
-        id_ns->mc = n->mc;
-        id_ns->dpc = n->dpc;
-        id_ns->dps = n->dps;
-
-        for (j = 0; j < n->nlbaf; j++) {
-            id_ns->lbaf[j].ds = BDRV_SECTOR_BITS + j;
+        if (status != NVME_SUCCESS) {
+            fprintf(stderr, "Unable to create a namepspace!\n");
+            fprintf(stderr, "The function returned with code %x\n", status);
+            fflush(stderr);
+            exit(EXIT_FAILURE);
         }
 
-        lba_index = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
-        blks = n->ns_size / ((1 << id_ns->lbaf[lba_index].ds));
-        id_ns->nuse = id_ns->ncap = id_ns->nsze = cpu_to_le64(blks);
-
-        ns->id = i + 1;
-        ns->ctrl = n;
-        ns->start_block = i * n->ns_size >> BDRV_SECTOR_BITS;
-        ns->util = bitmap_new(blks);
-        ns->uncorrectable = bitmap_new(blks);
-
-        n->ns_all[i] = ns;
-        n->ns_attached[i] = ns;
+        /* Attach the new namespace */
+        n->ns_attached[nsid - 1] = n->ns_all[nsid - 1];
     }
 }
 
@@ -2168,7 +2258,7 @@ static void nvme_init_ctrl(NvmeCtrl *n)
     id->npss = 0;
     id->sqes = (n->max_sqes << 4) | 0x6;
     id->cqes = (n->max_cqes << 4) | 0x4;
-    id->nn = cpu_to_le32(n->num_namespaces);
+    id->nn = 0;
     id->oncs = cpu_to_le16(n->oncs);
     id->fuses = cpu_to_le16(0);
     id->fna = 0;
@@ -2270,7 +2360,6 @@ static int nvme_init(PCIDevice *pci_dev)
 
     n->start_time = time(NULL);
     n->reg_size = pow2ceil(0x1004 + 2 * (n->num_queues + 1) * 4);
-    n->ns_size = bs_size / (uint64_t)n->num_namespaces;
 
     n->sq = g_malloc0(sizeof(*n->sq) * n->num_queues);
     n->cq = g_malloc0(sizeof(*n->cq) * n->num_queues);

@@ -806,6 +806,7 @@ typedef struct NvmeNamespace {
     unsigned long   *uncorrectable;
     uint32_t        id;
     uint64_t        start_block;
+    uint64_t        blocks;
     uint64_t        meta_start_offset;
 } NvmeNamespace;
 
@@ -833,7 +834,6 @@ typedef struct NvmeCtrl {
     uint32_t    num_namespaces;
     uint32_t    num_queues;
     uint32_t    max_q_ents;
-    uint64_t    ns_size;
     uint8_t     db_stride;
     uint8_t     aerl;
     uint8_t     acl;
